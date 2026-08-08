@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>BlockMerge — free puzzle game</title>
+<meta name="description" content="A free, no-install grid puzzle game. Drag pieces, clear lines, chain combos." />
+<style>
+  :root {
+    --bg: #0F1226;
+    --surface: #181C3A;
+    --grid-empty: #232852;
+    --grid-border: #2E3566;
+    --text-primary: #F5F6FF;
+    --text-secondary: #9A9FD1;
+    --accent: #7C5CFF;
+    --danger: #FF5C7C;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    justify-content: space-around;
+    padding: 12px 0 20px;
+  }
+  .stat { text-align: center; }
+  .stat-label {
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+  }
+  .stat-value {
+    font-size: 32px;
+    font-weight: 700;
+  }
+  #score-value { color: var(--accent); }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 8px;
+    aspect-ratio: 1;
+    width: 100%;
+  }
+  .cell {
+    border-radius: 4px;
+    background: var(--grid-empty);
+    border: 1px solid var(--grid-border);
+    transition: background 0.08s ease;
+  }
+  #tray {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    min-height: 110px;
+    margin-top: 24px;
+  }
+  .tray-slot {
+    width: 100px;
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tray-piece {
+    display: grid;
+    gap: 3px;
+    cursor: grab;
+    touch-action: none;
+    padding: 4px;
+  }
+  .tray-piece.dragging { opacity: 0.25; }
+  .piece-cell {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+  }
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 18, 38, 0.94);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    z-index: 50;
+  }
+  #overlay.show { display: flex; }
+  #overlay h1 { font-size: 32px; margin: 0; }
+  #overlay p { color: var(--text-secondary); margin: 8px 0 0; font-size: 18px; }
+  #restart-btn {
+    margin-top: 24px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 14px 36px;
+    border-radius: 999px;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #drag-ghost {
+    position: fixed;
+    pointer-events: none;
+    z-index: 100;
+    display: none;
+    gap: 3px;
+  }
+  footer {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 20px 0 4px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="stat">
+      <div class="stat-label">Score</div>
+      <div class="stat-value" id="score-value">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Best</div>
+      <div class="stat-value" id="best-value">0</div>
+    </div>
+  </header>
+
+  <div id="board"></div>
+  <div id="tray"></div>
+
+  <footer>BlockMerge — free, no account, no ads</footer>
+</div>
+
+<div id="drag-ghost"></div>
+
+<div id="overlay">
+  <h1>Game over</h1>
+  <p id="final-score"></p>
+  <button id="restart-btn">Play again</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var N = 8;
+  var COLORS = ["#7C5CFF", "#5CC8FF", "#5CFFB0", "#FFD95C", "#FF8A5C", "#FF5CD6"];
+
+  var SHAPES = [
+    [[0,0]],
+    [[0,0],[0,1]], [[0,0],[1,0]],
+    [[0,0],[0,1],[0,2]], [[0,0],[1,0],[2,0]],
+    [[0,0],[1,0],[1,1]], [[0,0],[0,1],[1,0]], [[0,0],[0,1],[1,1]], [[0,1],[1,0],[1,1]],
+    [[0,0],[0,1],[1,0],[1,1]],
+    [[0,0],[0,1],[0,2],[0,3]], [[0,0],[1,0],[2,0],[3,0]],
+    [[0,0],[0,1],[0,2],[1,1]],
+    [[0,1],[0,2],[1,0],[1,1]], [[0,0],[0,1],[1,1],[1,2]],
+    [[0,1],[1,0],[1,1],[1,2],[2,1]],
+    [[0,0],[1,0],[2,0],[2,1],[2,2]]
+  ];
+
+  var grid = makeEmptyGrid();
+  var cellColors = makeEmptyGrid();
+  var tray = [];
+  var score = 0;
+  var best = parseInt(localStorage.getItem("blockmerge_best") || "0", 10);
+  var combo = 0;
+
+  var boardEl = document.getElementById("board");
+  var trayEl = document.getElementById("tray");
+  var scoreEl = document.getElementById("score-value");
+  var bestEl = document.getElementById("best-value");
+  var overlayEl = document.getElementById("overlay");
+  var finalScoreEl = document.getElementById("final-score");
+  var ghostEl = document.getElementById("drag-ghost");
+
+  function makeEmptyGrid() {
+    var g = [];
+    for (var r = 0; r < N; r++) { g.push(new Array(N).fill(null)); }
+    return g;
+  }
+
+  function randomPiece() {
+    var shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    var color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    return { shape: shape, color: color, id: Math.random().toString(36).slice(2) };
+  }
+
+  function refillTrayIfEmpty() {
+    if (tray.every(function (p) { return !p; })) {
+      tray = [randomPiece(), randomPiece(), randomPiece()];
+    }
+    renderTray();
+  }
+
+  function canPlace(shape, r0, c0) {
+    for (var i = 0; i < shape.length; i++) {
+      var r = r0 + shape[i][0], c = c0 + shape[i][1];
+      if (r < 0 || r >= N || c < 0 || c >= N || grid[r][c]) return false;
+    }
+    return true;
+  }
+
+  function anyValidPlacement(shape) {
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        if (canPlace(shape, r, c)) return true;
+      }
+    }
+    return false;
+  }
+
+  function isGameOver() {
+    var remaining = tray.filter(function (p) { return p; });
+    if (remaining.length === 0) return false;
+    return remaining.every(function (p) { return !anyValidPlacement(p.shape); });
+  }
+
+  function clearLines() {
+    var fullRows = [], fullCols = [];
+    for (var r = 0; r < N; r++) {
+      if (grid[r].every(function (v) { return v; })) fullRows.push(r);
+    }
+    for (var c = 0; c < N; c++) {
+      var full = true;
+      for (var r2 = 0; r2 < N; r2++) { if (!grid[r2][c]) { full = false; break; } }
+      if (full) fullCols.push(c);
+    }
+    fullRows.forEach(function (r) { for (var c = 0; c < N; c++) { grid[r][c] = null; } });
+    fullCols.forEach(function (c) { for (var r = 0; r < N; r++) { grid[r][c] = null; } });
+    return fullRows.length + fullCols.length;
+  }
+
+  function renderBoard(previewCells, previewValid) {
+    boardEl.innerHTML = "";
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var cell = document.createElement("div");
+        cell.className = "cell";
+        var isPreview = previewCells && previewCells.some(function (p) { return p.r === r && p.c === c; });
+        if (grid[r][c]) {
+          cell.style.background = grid[r][c];
+          cell.style.borderColor = "transparent";
+        } else if (isPreview) {
+          cell.style.background = previewValid ? "#7C5CFF88" : "#FF5C7C88";
+        }
+        boardEl.appendChild(cell);
+      }
+    }
+  }
+
+  function renderTray() {
+    trayEl.innerHTML = "";
+    tray.forEach(function (piece) {
+      var slot = document.createElement("div");
+      slot.className = "tray-slot";
+      if (piece) {
+        var maxR = Math.max.apply(null, piece.shape.map(function (s) { return s[0]; })) + 1;
+        var maxC = Math.max.apply(null, piece.shape.map(function (s) { return s[1]; })) + 1;
+        var pieceEl = document.createElement("div");
+        pieceEl.className = "tray-piece";
+        pieceEl.style.gridTemplateColumns = "repeat(" + maxC + ", 22px)";
+        pieceEl.style.gridTemplateRows = "repeat(" + maxR + ", 22px)";
+        pieceEl.dataset.id = piece.id;
+        for (var r = 0; r < maxR; r++) {
+          for (var c = 0; c < maxC; c++) {
+            var filled = piece.shape.some(function (s) { return s[0] === r && s[1] === c; });
+            var pc = document.createElement("div");
+            pc.className = "piece-cell";
+            pc.style.background = filled ? piece.color : "transparent";
+            pieceEl.appendChild(pc);
+          }
+        }
+        pieceEl.addEventListener("pointerdown", function (piece, el) {
+          return function (e) { startDrag(e, piece, el); };
+        }(piece, pieceEl));
+        slot.appendChild(pieceEl);
+      }
+      trayEl.appendChild(slot);
+    });
+  }
+
+  function updateStats() {
+    scoreEl.textContent = score;
+    bestEl.textContent = best;
+  }
+
+  var dragPiece = null;
+  var dragEl = null;
+
+  function boardRect() { return boardEl.getBoundingClientRect(); }
+
+  function targetCell(x, y) {
+    var rect = boardRect();
+    var padding = 8, gap = 4;
+    var cellSize = (rect.width - padding * 2 + gap) / N;
+    var c = Math.floor((x - rect.left - padding) / cellSize);
+    var r = Math.floor((y - rect.top - padding - 70) / cellSize);
+    return { r: r, c: c };
+  }
+
+  function startDrag(e, piece, el) {
+    e.preventDefault();
+    dragPiece = piece;
+    dragEl = el;
+    el.classList.add("dragging");
+
+    ghostEl.innerHTML = el.innerHTML;
+    ghostEl.style.gridTemplateColumns = el.style.gridTemplateColumns;
+    ghostEl.style.gridTemplateRows = el.style.gridTemplateRows;
+    ghostEl.style.display = "grid";
+    moveGhost(e.clientX, e.clientY);
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function moveGhost(x, y) {
+    ghostEl.style.left = (x - 40) + "px";
+    ghostEl.style.top = (y - 90) + "px";
+  }
+
+  function onMove(e) {
+    moveGhost(e.clientX, e.clientY);
+    var t = targetCell(e.clientX, e.clientY);
+    var cells = dragPiece.shape.map(function (s) { return { r: t.r + s[0], c: t.c + s[1] }; });
+    renderBoard(cells, canPlace(dragPiece.shape, t.r, t.c));
+  }
+
+  function onUp(e) {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    ghostEl.style.display = "none";
+    if (dragEl) dragEl.classList.remove("dragging");
+
+    var t = targetCell(e.clientX, e.clientY);
+    if (canPlace(dragPiece.shape, t.r, t.c)) {
+      dragPiece.shape.forEach(function (s) { grid[t.r + s[0]][t.c + s[1]] = dragPiece.color; });
+      score += dragPiece.shape.length;
+
+      var cleared = clearLines();
+      if (cleared > 0) {
+        combo += 1;
+        score += cleared * 10 + (cleared > 1 ? (cleared - 1) * 15 : 0) + combo * 5;
+      } else {
+        combo = 0;
+      }
+
+      tray = tray.map(function (p) { return p && p.id === dragPiece.id ? null : p; });
+      refillTrayIfEmpty();
+
+      if (score > best) {
+        best = score;
+        localStorage.setItem("blockmerge_best", String(best));
+      }
+      updateStats();
+      renderBoard();
+
+      if (isGameOver()) {
+        finalScoreEl.textContent = "Score: " + score;
+        overlayEl.classList.add("show");
+      }
+    } else {
+      renderBoard();
+    }
+    dragPiece = null;
+    dragEl = null;
+  }
+
+  document.getElementById("restart-btn").addEventListener("click", function () {
+    grid = makeEmptyGrid();
+    score = 0;
+    combo = 0;
+    overlayEl.classList.remove("show");
+    tray = [];
+    refillTrayIfEmpty();
+    updateStats();
+    renderBoard();
+  });
+
+  refillTrayIfEmpty();
+  updateStats();
+  renderBoard();
+})();
+</script>
+</body>
+</html>
